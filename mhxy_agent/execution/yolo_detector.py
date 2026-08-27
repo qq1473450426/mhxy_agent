@@ -13,7 +13,7 @@ class Detection:
 
 
 class YoloDetector:
-    """YOLO detector with automatic NVIDIA CUDA/CPU device selection."""
+    """YOLO detector with NVIDIA CUDA preference and lightweight inference defaults."""
 
     def __init__(self, model_path: str = "models/mhxy_yolo.pt", confidence: float = 0.45) -> None:
         self.model_path = Path(model_path)
@@ -72,13 +72,31 @@ class YoloDetector:
             return []
         try:
             self._resolve_device()
-            results = self._model.predict(
-                source=image,
-                conf=self.confidence,
-                device=self.device,
-                half=self.using_cuda,
-                verbose=False,
-            )
+            kwargs = {
+                "source": image,
+                "conf": self.confidence,
+                "device": self.device,
+                "verbose": False,
+                # Game UI does not need full 640px inference for every frame.
+                "imgsz": 512,
+                "max_det": 20,
+            }
+            # Ultralytics 8.4.x renamed the legacy `half` precision flag to
+            # `quantize`. Use the new spelling so users do not get the warning.
+            # Older supported versions fall back to the legacy flag only when
+            # the new argument is rejected.
+            if self.using_cuda:
+                kwargs["quantize"] = 16
+            try:
+                results = self._model.predict(**kwargs)
+            except TypeError as exc:
+                if "quantize" not in str(exc):
+                    raise
+                kwargs.pop("quantize", None)
+                # Compatibility path for older Ultralytics builds.
+                kwargs["half"] = True
+                results = self._model.predict(**kwargs)
+
             detections: List[Detection] = []
             for result in results:
                 names = getattr(result, "names", {})

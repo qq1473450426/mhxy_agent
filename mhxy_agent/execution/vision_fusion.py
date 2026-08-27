@@ -23,15 +23,18 @@ class VisionFusionResult:
 
 
 class VisionFusion:
-    """Combine object detection and OCR without inventing coordinates."""
+    """OCR-first vision pipeline; YOLO is explicitly opt-in because it is expensive."""
 
     def __init__(self, model_path: str = "models/mhxy_yolo.pt") -> None:
         self.detector = YoloDetector(model_path=model_path)
         self.ocr = VisionEngine()
 
-    def analyze(self, image: Any) -> VisionFusionResult:
-        detections = tuple(self.detector.detect(image))
+    def analyze(self, image: Any, use_yolo: bool = False) -> VisionFusionResult:
+        # OCR is sufficient for the current mentor task-link target.
         ocr = self.ocr.analyze(image)
+        detections: Tuple[Detection, ...] = ()
+        if use_yolo:
+            detections = tuple(self.detector.detect(image))
         targets: List[FusedTarget] = []
         for detection in detections:
             x, y, w, h = detection.box

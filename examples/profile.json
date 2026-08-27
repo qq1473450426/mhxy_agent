@@ -1,24 +1,18 @@
-server: "示例新区"
-version: "待确认"
-online_hours: 4
-total_investment: 0
-current_assets: 0
-emergency_fund: 0
-accounts:
-  - name: "角色1"
-    school: "未知"
-    level: 69
-    cash: 0
-    reserve: 0
-    hp: 0
-    mp: 0
-    status: "idle"
-tasks:
-  - name: "日常任务A"
-    hours: 1
-    cash: 100
-    reserve: 20
-    items: 30
-    cost: 10
-    risk: 5
-    stability: "A"
+{
+  "server": "示例新区",
+  "version": "simulation",
+  "online_hours": 4,
+  "total_investment": 0,
+  "current_assets": 0,
+  "emergency_fund": 0,
+  "accounts": [
+    {"name": "角色1", "school": "未知", "level": 69, "cash": 0, "reserve": 0, "hp": 0, "mp": 0, "status": "idle"},
+    {"name": "角色2", "school": "未知", "level": 69, "cash": 0, "reserve": 0, "hp": 0, "mp": 0, "status": "idle"},
+    {"name": "角色3", "school": "未知", "level": 69, "cash": 0, "reserve": 0, "hp": 0, "mp": 0, "status": "idle"},
+    {"name": "角色4", "school": "未知", "level": 69, "cash": 0, "reserve": 0, "hp": 0, "mp": 0, "status": "idle"},
+    {"name": "角色5", "school": "未知", "level": 69, "cash": 0, "reserve": 0, "hp": 0, "mp": 0, "status": "idle"}
+  ],
+  "tasks": [
+    {"name": "日常任务A", "hours": 1, "cash": 100, "reserve": 20, "items": 30, "cost": 10, "risk": 5, "stability": "A"}
+  ]
+}

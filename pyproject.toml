@@ -5,15 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mhxy-agent"
 version = "0.1.0"
-description = "梦幻西游五开长期运营 Strategy Brain"
+description = "梦幻西游五开长期运营 Strategy Brain Windows Desktop Agent"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["PySide6>=6.7,<7"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
 [project.scripts]
 mhxy-agent = "mhxy_agent.cli:main"
+mhxy-agent-desktop = "mhxy_agent.app:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

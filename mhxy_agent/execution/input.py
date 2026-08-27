@@ -12,7 +12,20 @@ class Point:
 
 
 class WindowsInput:
-    """Real Windows mouse input. Points are relative to the captured top-level window."""
+    """Windows mouse input. Points are in the same pixel space as WindowCapture."""
+
+    def __init__(self) -> None:
+        self._set_dpi_awareness()
+
+    @staticmethod
+    def _set_dpi_awareness() -> None:
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
 
     def click(self, handle: int, point: Point) -> tuple[bool, str]:
         try:
@@ -36,12 +49,11 @@ class WindowsInput:
             try:
                 win32gui.SetForegroundWindow(handle)
             except Exception:
-                # Foreground activation can be denied by Windows focus rules;
-                # SendInput may still succeed, so do not fail solely here.
                 pass
 
             if not self._send_input_click(screen_x, screen_y):
-                return False, f"SendInput 点击失败：({screen_x},{screen_y})"
+                err = ctypes.get_last_error()
+                return False, f"SendInput 点击失败：屏幕坐标 ({screen_x},{screen_y})，Win32Error={err}"
             return True, f"鼠标点击完成：窗口相对坐标 ({point.x},{point.y})，屏幕坐标 ({screen_x},{screen_y})"
         except Exception as exc:
             return False, f"鼠标点击失败：{exc}"
@@ -54,9 +66,9 @@ class WindowsInput:
         if screen_w <= 1 or screen_h <= 1:
             return False
 
-        # SendInput absolute coordinates use a 0..65535 virtual desktop range.
         abs_x = round(x * 65535 / (screen_w - 1))
         abs_y = round(y * 65535 / (screen_h - 1))
+        ULONG_PTR = ctypes.c_size_t
 
         class MOUSEINPUT(ctypes.Structure):
             _fields_ = [
@@ -65,37 +77,35 @@ class WindowsInput:
                 ("mouseData", wintypes.DWORD),
                 ("dwFlags", wintypes.DWORD),
                 ("time", wintypes.DWORD),
-                ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG)),
+                ("dwExtraInfo", ULONG_PTR),
             ]
+
+        class INPUT_UNION(ctypes.Union):
+            _fields_ = [("mi", MOUSEINPUT)]
 
         class INPUT(ctypes.Structure):
+            _anonymous_ = ("u",)
             _fields_ = [
                 ("type", wintypes.DWORD),
-                ("mi", MOUSEINPUT),
+                ("u", INPUT_UNION),
             ]
 
-        inp = INPUT()
-        inp.type = 0  # INPUT_MOUSE
-        inp.mi.dx = abs_x
-        inp.mi.dy = abs_y
-        inp.mi.mouseData = 0
-        inp.mi.dwFlags = 0x0001 | 0x8000  # MOVE | ABSOLUTE
-        inp.mi.time = 0
-        inp.mi.dwExtraInfo = ctypes.pointer(wintypes.ULONG(0))
+        def make_input(dx: int, dy: int, flags: int) -> INPUT:
+            item = INPUT()
+            item.type = 0  # INPUT_MOUSE
+            item.mi.dx = dx
+            item.mi.dy = dy
+            item.mi.mouseData = 0
+            item.mi.dwFlags = flags
+            item.mi.time = 0
+            item.mi.dwExtraInfo = 0
+            return item
 
-        move_result = user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
-        if move_result != 1:
+        move = make_input(abs_x, abs_y, 0x0001 | 0x8000)  # MOVE | ABSOLUTE
+        if user32.SendInput(1, ctypes.byref(move), ctypes.sizeof(INPUT)) != 1:
             return False
 
-        down = INPUT()
-        down.type = 0
-        down.mi.mouseData = 0
-        down.mi.dwFlags = 0x0002  # LEFTDOWN
-        down.mi.dwExtraInfo = ctypes.pointer(wintypes.ULONG(0))
-        up = INPUT()
-        up.type = 0
-        up.mi.mouseData = 0
-        up.mi.dwFlags = 0x0004  # LEFTUP
-        up.mi.dwExtraInfo = ctypes.pointer(wintypes.ULONG(0))
-
-        return user32.SendInput(2, ctypes.byref(down), ctypes.sizeof(INPUT)) == 2
+        down = make_input(0, 0, 0x0002)  # LEFTDOWN
+        up = make_input(0, 0, 0x0004)  # LEFTUP
+        inputs = (INPUT * 2)(down, up)
+        return user32.SendInput(2, inputs, ctypes.sizeof(INPUT)) == 2

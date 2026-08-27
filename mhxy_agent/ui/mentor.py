@@ -10,17 +10,19 @@ from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QMessageBox, QPush
 from ..config import AppConfig
 from ..execution.game_session import GameSession
 from ..execution.mentor_detector import MentorTargetDetector
+from ..execution.task_panel import TaskPanelOCR
 from ..execution.vision_fusion import VisionFusion
 from ..execution.visual_debug import render_debug
 
 
 class MentorPage(QWidget):
-    """Real-window mentor workflow with explicit click-target visualization."""
+    """Real-window mentor workflow with isolated task-panel OCR and click preview."""
 
     def __init__(self) -> None:
         super().__init__()
         self.session = GameSession(AppConfig.from_env().game_window_keyword)
         self.fusion = VisionFusion()
+        self.task_ocr = TaskPanelOCR()
         self.detector = MentorTargetDetector()
         self.last_action = None
         self.last_image = None
@@ -119,14 +121,18 @@ class MentorPage(QWidget):
         path.parent.mkdir(parents=True, exist_ok=True)
         image.save(path)
 
+        # YOLO sees the full game image. OCR for the mentor action sees only
+        # the right-side task tracker, excluding the lower-left chat box.
         fused = self.fusion.analyze(image)
-        self.last_action = self.detector.detect(fused.ocr, image)
-        debug_path = render_debug(image, fused.yolo, fused.ocr.regions)
+        task_ocr = self.task_ocr.analyze(image)
+        self.last_action = self.detector.detect(task_ocr, image)
+        debug_path = render_debug(image, fused.yolo, task_ocr.regions)
         self._show_preview(debug_path)
 
         self.output.append(f"截图成功：{image.size[0]}x{image.size[1]}")
-        self.output.append(f"OCR：{fused.ocr.text or '未识别到文字'}")
-        self.output.append(f"OCR区域：{len(fused.ocr.regions)}")
+        self.output.append(f"任务面板 OCR ROI：x≥{int(image.size[0] * self.task_ocr.x_ratio)}，y≥{int(image.size[1] * self.task_ocr.y_ratio)}")
+        self.output.append(f"任务面板 OCR：{task_ocr.text or '未识别到文字'}")
+        self.output.append(f"任务面板 OCR区域：{len(task_ocr.regions)}")
         self.output.append(f"YOLO检测：{len(fused.yolo)}")
         if fused.yolo:
             for target in fused.targets:

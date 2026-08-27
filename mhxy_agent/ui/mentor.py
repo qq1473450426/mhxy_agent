@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
@@ -14,7 +15,7 @@ from ..execution.visual_debug import render_debug
 
 
 class MentorPage(QWidget):
-    """Real-window mentor workflow: select -> capture -> detect -> confirm -> click."""
+    """Real-window mentor workflow with explicit click-target visualization."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -22,6 +23,7 @@ class MentorPage(QWidget):
         self.fusion = VisionFusion()
         self.detector = MentorTargetDetector()
         self.last_action = None
+        self.last_image = None
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("师门任务 · YOLO + OCR 视觉模式"))
 
@@ -62,6 +64,22 @@ class MentorPage(QWidget):
         layout.addWidget(self.output, 1)
         self.refresh_windows()
 
+    def _show_preview(self, path: Path) -> None:
+        self.preview.setPixmap(QPixmap(str(path)).scaled(self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def _render_target(self, click_point: Optional[tuple[int, int]], result: Optional[bool] = None) -> None:
+        if self.last_image is None:
+            return
+        path = render_debug(
+            self.last_image,
+            (),
+            (),
+            output="data/latest_click_target.png" if result is None else "data/latest_click_result.png",
+            click_point=click_point,
+            click_result=result,
+        )
+        self._show_preview(path)
+
     def refresh_windows(self) -> None:
         windows = self.session.observer.list_windows()
         self.window_box.clear()
@@ -96,16 +114,15 @@ class MentorPage(QWidget):
             self.status.setText("状态：截图失败")
             return
         image = result.image
+        self.last_image = image
         path = Path("data/latest_game_capture.png")
         path.parent.mkdir(parents=True, exist_ok=True)
         image.save(path)
 
         fused = self.fusion.analyze(image)
         self.last_action = self.detector.detect(fused.ocr, image)
-
-        # Render an independent debug image so the original capture remains intact.
         debug_path = render_debug(image, fused.yolo, fused.ocr.regions)
-        self.preview.setPixmap(QPixmap(str(debug_path)).scaled(self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        self._show_preview(debug_path)
 
         self.output.append(f"截图成功：{image.size[0]}x{image.size[1]}")
         self.output.append(f"OCR：{fused.ocr.text or '未识别到文字'}")
@@ -126,8 +143,9 @@ class MentorPage(QWidget):
         else:
             self.step.setEnabled(True)
             self.output.append(f"候选目标：{self.last_action.target}；窗口相对坐标：{self.last_action.point}")
-            self.output.append("目标策略：优先点击任务面板中的红色文字链接，而不是 NPC 角色模型。")
-            self.status.setText("状态：已识别，可执行一步")
+            self.output.append("绿色十字 = 准备点击位置；确认前绝不移动鼠标。")
+            self._render_target(self.last_action.point)
+            self.status.setText("状态：已识别，请检查绿色点击标记")
 
     def execute_one(self) -> None:
         if self.last_action is None or self.last_action.point is None:
@@ -135,12 +153,19 @@ class MentorPage(QWidget):
         if self.last_action is None or self.last_action.point is None:
             return
         point = self.last_action.point
-        answer = QMessageBox.question(self, "确认执行", f"识别目标：{self.last_action.target}\n窗口相对坐标：{point}\n\n确认点击一次？")
+        self._render_target(point)
+        answer = QMessageBox.question(
+            self,
+            "确认执行",
+            f"识别目标：{self.last_action.target}\n窗口相对坐标：{point}\n\n绿色十字就是准备点击的位置。\n请确认它落在右侧任务面板红色“师父”文字上。\n\n确认后才会真实点击一次。",
+        )
         if answer != QMessageBox.Yes:
-            self.output.append("用户取消执行。")
+            self.output.append("用户取消执行；未发送鼠标输入。")
             return
         ok, message = self.session.click(point[0], point[1])
         self.output.append(message)
+        self._render_target(point, ok)
+        self.output.append("预览标记：CLICK OK=已发送输入；CLICK FAILED=输入失败。")
         self.status.setText("状态：已执行一次" if ok else "状态：执行失败")
         self.last_action = None
         self.step.setEnabled(False)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 from .vision import VisionEngine, VisionResult
 from .yolo_detector import Detection, YoloDetector
@@ -23,15 +23,19 @@ class VisionFusionResult:
 
 
 class VisionFusion:
-    """OCR-first vision pipeline; YOLO is explicitly opt-in because it is expensive."""
+    """OCR-first pipeline; YOLO is opt-in and an existing OCR result can be reused."""
 
     def __init__(self, model_path: str = "models/mhxy_yolo.pt") -> None:
         self.detector = YoloDetector(model_path=model_path)
         self.ocr = VisionEngine()
 
-    def analyze(self, image: Any, use_yolo: bool = False) -> VisionFusionResult:
-        # OCR is sufficient for the current mentor task-link target.
-        ocr = self.ocr.analyze(image)
+    def analyze(
+        self,
+        image: Any,
+        use_yolo: bool = False,
+        ocr_result: Optional[VisionResult] = None,
+    ) -> VisionFusionResult:
+        ocr = ocr_result if ocr_result is not None else self.ocr.analyze(image)
         detections: Tuple[Detection, ...] = ()
         if use_yolo:
             detections = tuple(self.detector.detect(image))

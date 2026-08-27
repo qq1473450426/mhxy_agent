@@ -27,6 +27,11 @@ class GameSession:
             return self.capture.__class__.__name__, None
         return self.capture.capture(self.window.handle)
 
+    def move_cursor(self, x: int, y: int, duration: float = 0.8) -> tuple[bool, str]:
+        if self.window is None:
+            return False, "尚未连接游戏窗口"
+        return self.input.move_to(self.window.handle, Point(x, y), duration=duration)
+
     def click(self, x: int, y: int) -> tuple[bool, str]:
         if self.window is None:
             return False, "尚未连接游戏窗口"

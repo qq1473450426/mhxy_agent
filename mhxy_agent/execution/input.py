@@ -41,7 +41,6 @@ class WindowsInput:
     @staticmethod
     def _screen_metrics() -> Tuple[int, int, int, int]:
         user32 = ctypes.windll.user32
-        # Virtual desktop metrics also work when multiple monitors are present.
         left = int(user32.GetSystemMetrics(76))
         top = int(user32.GetSystemMetrics(77))
         width = int(user32.GetSystemMetrics(78))
@@ -49,16 +48,13 @@ class WindowsInput:
         return left, top, width, height
 
     def _set_cursor_pos(self, x: int, y: int) -> Tuple[bool, str]:
-        """Move the real Windows cursor. Use user32 first, then SendInput."""
+        """Move the real Windows cursor; fall back to SendInput if SetCursorPos fails."""
         try:
-            ok = bool(self._user32.SetCursorPos(int(x), int(y)))
-            if ok:
+            if bool(self._user32.SetCursorPos(int(x), int(y))):
                 return True, "SetCursorPos"
         except Exception:
             pass
 
-        # Some environments reject the pywin32 wrapper even though user32 input works.
-        # SendInput uses absolute virtual-desktop coordinates and is checked explicitly.
         try:
             left, top, width, height = self._screen_metrics()
             if width <= 1 or height <= 1:
@@ -77,10 +73,7 @@ class WindowsInput:
                 ]
 
             class INPUT(ctypes.Structure):
-                _fields_ = [
-                    ("type", wintypes.DWORD),
-                    ("mi", MOUSEINPUT),
-                ]
+                _fields_ = [("type", wintypes.DWORD), ("mi", MOUSEINPUT)]
 
             inp = INPUT(
                 type=0,
@@ -133,21 +126,39 @@ class WindowsInput:
             err = ctypes.get_last_error()
             return False, f"鼠标移动失败：目标屏幕坐标 ({screen_x},{screen_y})，Win32Error={err}，异常={exc}"
 
+    def _send_button(self, flag: int) -> Tuple[bool, str]:
+        class MOUSEINPUT(ctypes.Structure):
+            _fields_ = [
+                ("dx", wintypes.LONG),
+                ("dy", wintypes.LONG),
+                ("mouseData", wintypes.DWORD),
+                ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("dwExtraInfo", ctypes.c_void_p),
+            ]
+
+        class INPUT(ctypes.Structure):
+            _fields_ = [("type", wintypes.DWORD), ("mi", MOUSEINPUT)]
+
+        inp = INPUT(
+            type=0,
+            mi=MOUSEINPUT(dx=0, dy=0, mouseData=0, dwFlags=flag, time=0, dwExtraInfo=None),
+        )
+        sent = int(self._user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT)))
+        return (sent == 1, f"SendInput鼠标按键返回={sent}")
+
     def click(self, handle: int, point: Point, move_duration: float = 0.8, settle_delay: float = 0.15) -> Tuple[bool, str]:
         """Move the visible cursor to the target, pause, then issue a left click."""
         ok, message = self.move_to(handle, point, duration=move_duration)
         if not ok:
             return False, message
-        try:
-            import win32api  # type: ignore
-            time.sleep(max(0.0, settle_delay))
-            win32api.mouse_event(self.LEFTDOWN, 0, 0, 0, 0)
-            time.sleep(0.07)
-            win32api.mouse_event(self.LEFTUP, 0, 0, 0, 0)
-            return True, message + f"；已执行左键点击，停留={settle_delay:.2f}s"
-        except Exception as exc:
-            err = ctypes.get_last_error()
-            return False, f"鼠标点击失败：已移动到目标但按键发送失败，Win32Error={err}，异常={exc}"
+        time.sleep(max(0.0, settle_delay))
+        down_ok, down_msg = self._send_button(self.LEFTDOWN)
+        time.sleep(0.07)
+        up_ok, up_msg = self._send_button(self.LEFTUP)
+        if down_ok and up_ok:
+            return True, message + f"；已执行左键点击，停留={settle_delay:.2f}s；{down_msg}；{up_msg}"
+        return False, message + f"；鼠标按键发送失败；{down_msg}；{up_msg}"
 
     def _human_move(self, start: Tuple[int, int], end: Tuple[int, int], duration: float) -> Tuple[bool, str]:
         """Move the real cursor along a visible curved path."""

@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Optional
+
 from .models import GameProfile, Task
 
 LEVEL_MILESTONES = (20, 30, 40, 50, 60, 69, 89, 109, 129, 159, 175)
@@ -24,7 +28,7 @@ def daily_plan(profile: GameProfile, tasks: list[Task]) -> list[Task]:
     return plan
 
 
-def upgrade_payback(total_cost: float, incremental_profit_per_hour: float) -> float | None:
+def upgrade_payback(total_cost: float, incremental_profit_per_hour: float) -> Optional[float]:
     if total_cost < 0 or incremental_profit_per_hour <= 0:
         return None
     return total_cost / incremental_profit_per_hour
@@ -33,7 +37,7 @@ def upgrade_payback(total_cost: float, incremental_profit_per_hour: float) -> fl
 class StrategyEngine:
     """Deterministic strategy engine; LLM and executor adapters can be added later."""
 
-    def create_daily_plan(self, profile: GameProfile, hours: float | None = None) -> list[Task]:
+    def create_daily_plan(self, profile: GameProfile, hours: Optional[float] = None) -> list[Task]:
         budget = profile.online_hours if hours is None else max(0.0, hours)
         tasks = [
             Task("稳定日常", 1.0, cash=120, reserve=30, items=20, cost=10, risk=2, stability="S"),

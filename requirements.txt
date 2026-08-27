@@ -6,3 +6,10 @@ Pillow>=10.0,<12
 pytesseract>=0.3.13
 rapidocr_onnxruntime>=1.4,<2
 ultralytics>=8.3,<9
+# NVIDIA CUDA build for the project's Python 3.9 Windows environment.
+# RTX 2060 is supported by CUDA-enabled PyTorch.
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.6.0+cu126; platform_system == "Windows" and python_version < "3.10"
+torchvision==0.21.0+cu126; platform_system == "Windows" and python_version < "3.10"
+torch==2.6.0+cu126; platform_system == "Windows" and python_version >= "3.10"
+torchvision==0.21.0+cu126; platform_system == "Windows" and python_version >= "3.10"

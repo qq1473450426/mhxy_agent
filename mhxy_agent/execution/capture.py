@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass(frozen=True)
 class CaptureResult:
     ok: bool
     message: str
-    image: object | None = None
+    image: Optional[object] = None
 
 
 class WindowCapture:

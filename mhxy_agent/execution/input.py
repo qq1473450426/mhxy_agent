@@ -36,7 +36,6 @@ class WindowsInput:
         try:
             if not win32gui.IsWindow(handle):
                 return False, "目标窗口无效"
-
             left, top, right, bottom = win32gui.GetWindowRect(handle)
             width, height = right - left, bottom - top
             if width <= 0 or height <= 0:
@@ -51,10 +50,19 @@ class WindowsInput:
             except Exception:
                 pass
 
-            if not self._send_input_click(screen_x, screen_y):
+            if self._send_input_click(screen_x, screen_y):
+                return True, f"鼠标点击完成：窗口相对坐标 ({point.x},{point.y})，屏幕坐标 ({screen_x},{screen_y})，方式=SendInput"
+
+            # Compatibility fallback for clients that reject SendInput's absolute move.
+            try:
+                import win32api  # type: ignore
+                win32api.SetCursorPos((screen_x, screen_y))
+                win32api.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
+                win32api.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
+                return True, f"鼠标点击完成：窗口相对坐标 ({point.x},{point.y})，屏幕坐标 ({screen_x},{screen_y})，方式=win32api fallback"
+            except Exception as exc:
                 err = ctypes.get_last_error()
-                return False, f"SendInput 点击失败：屏幕坐标 ({screen_x},{screen_y})，Win32Error={err}"
-            return True, f"鼠标点击完成：窗口相对坐标 ({point.x},{point.y})，屏幕坐标 ({screen_x},{screen_y})"
+                return False, f"鼠标点击失败：SendInput/Win32 fallback 均失败，屏幕坐标 ({screen_x},{screen_y})，Win32Error={err}，fallback={exc}"
         except Exception as exc:
             return False, f"鼠标点击失败：{exc}"
 
@@ -85,14 +93,11 @@ class WindowsInput:
 
         class INPUT(ctypes.Structure):
             _anonymous_ = ("u",)
-            _fields_ = [
-                ("type", wintypes.DWORD),
-                ("u", INPUT_UNION),
-            ]
+            _fields_ = [("type", wintypes.DWORD), ("u", INPUT_UNION)]
 
         def make_input(dx: int, dy: int, flags: int) -> INPUT:
             item = INPUT()
-            item.type = 0  # INPUT_MOUSE
+            item.type = 0
             item.mi.dx = dx
             item.mi.dy = dy
             item.mi.mouseData = 0
@@ -101,11 +106,10 @@ class WindowsInput:
             item.mi.dwExtraInfo = 0
             return item
 
-        move = make_input(abs_x, abs_y, 0x0001 | 0x8000)  # MOVE | ABSOLUTE
+        move = make_input(abs_x, abs_y, 0x0001 | 0x8000)
         if user32.SendInput(1, ctypes.byref(move), ctypes.sizeof(INPUT)) != 1:
             return False
-
-        down = make_input(0, 0, 0x0002)  # LEFTDOWN
-        up = make_input(0, 0, 0x0004)  # LEFTUP
+        down = make_input(0, 0, 0x0002)
+        up = make_input(0, 0, 0x0004)
         inputs = (INPUT * 2)(down, up)
         return user32.SendInput(2, inputs, ctypes.sizeof(INPUT)) == 2

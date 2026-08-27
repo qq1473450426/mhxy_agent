@@ -5,6 +5,8 @@ from pathlib import Path
 
 
 class Database:
+    """Small SQLite repository for durable agent state."""
+
     def __init__(self, path: str = "data/mhxy_agent.db") -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -45,11 +47,6 @@ class Database:
         )
         self.connection.commit()
         return int(cursor.lastrowid)
-
-    def list_accounts(self) -> list[tuple]:
-        return self.connection.execute(
-            "SELECT id, name, level, school, enabled FROM accounts ORDER BY id"
-        ).fetchall()
 
     def log_action(self, stage: str, action: str, result: str = "") -> None:
         self.connection.execute(

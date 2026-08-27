@@ -49,9 +49,13 @@ class MentorPage(QWidget):
         self.step = QPushButton("执行识别动作")
         self.step.clicked.connect(self.execute_one)
         self.step.setEnabled(False)
+        self.move_test = QPushButton("移动到目标（不点击）")
+        self.move_test.clicked.connect(self.move_to_target)
+        self.move_test.setEnabled(False)
         stop = QPushButton("停止")
         stop.clicked.connect(self.stop)
         buttons.addWidget(observe)
+        buttons.addWidget(self.move_test)
         buttons.addWidget(self.step)
         buttons.addWidget(stop)
         layout.addLayout(buttons)
@@ -102,6 +106,7 @@ class MentorPage(QWidget):
         self.session.window = window
         self.last_action = None
         self.step.setEnabled(False)
+        self.move_test.setEnabled(False)
         self.status.setText("状态：已连接")
         self.output.append(f"已连接：{window.title} (HWND={window.handle})")
 
@@ -121,8 +126,6 @@ class MentorPage(QWidget):
         path.parent.mkdir(parents=True, exist_ok=True)
         image.save(path)
 
-        # YOLO sees the full game image. OCR for the mentor action sees only
-        # the right-side task tracker, excluding the lower-left chat box.
         fused = self.fusion.analyze(image)
         task_ocr = self.task_ocr.analyze(image)
         self.last_action = self.detector.detect(task_ocr, image)
@@ -144,14 +147,29 @@ class MentorPage(QWidget):
 
         if self.last_action is None:
             self.step.setEnabled(False)
+            self.move_test.setEnabled(False)
             self.output.append("未找到师门任务红色链接，不执行点击。")
             self.status.setText("状态：已截图，未找到目标")
         else:
             self.step.setEnabled(True)
+            self.move_test.setEnabled(True)
             self.output.append(f"候选目标：{self.last_action.target}；窗口相对坐标：{self.last_action.point}")
             self.output.append("绿色十字 = 准备点击位置；确认前绝不移动鼠标。")
             self._render_target(self.last_action.point)
-            self.status.setText("状态：已识别，请检查绿色点击标记")
+            self.status.setText("状态：已识别，请先用‘移动到目标’检查坐标")
+
+    def move_to_target(self) -> None:
+        if self.last_action is None or self.last_action.point is None:
+            return
+        point = self.last_action.point
+        self._render_target(point)
+        self.output.append(f"开始可见鼠标移动：窗口相对坐标 {point}；本次仅移动，不点击。")
+        ok, message = self.session.move_cursor(point[0], point[1], duration=0.9)
+        self.output.append(message)
+        if ok:
+            self.status.setText("状态：鼠标已到目标位置（未点击）")
+        else:
+            self.status.setText("状态：鼠标移动失败")
 
     def execute_one(self) -> None:
         if self.last_action is None or self.last_action.point is None:
@@ -163,7 +181,7 @@ class MentorPage(QWidget):
         answer = QMessageBox.question(
             self,
             "确认执行",
-            f"识别目标：{self.last_action.target}\n窗口相对坐标：{point}\n\n绿色十字就是准备点击的位置。\n请确认它落在右侧任务面板红色“师父”文字上。\n\n确认后才会真实点击一次。",
+            f"识别目标：{self.last_action.target}\n窗口相对坐标：{point}\n\n执行时鼠标会以可见轨迹移动到绿色十字，停留后再左键点击。\n请确认它落在右侧任务面板红色“师父”文字上。\n\n确认后才会真实点击一次。",
         )
         if answer != QMessageBox.Yes:
             self.output.append("用户取消执行；未发送鼠标输入。")
@@ -175,9 +193,11 @@ class MentorPage(QWidget):
         self.status.setText("状态：已执行一次" if ok else "状态：执行失败")
         self.last_action = None
         self.step.setEnabled(False)
+        self.move_test.setEnabled(False)
 
     def stop(self) -> None:
         self.last_action = None
         self.step.setEnabled(False)
+        self.move_test.setEnabled(False)
         self.output.append("执行已停止。")
         self.status.setText("状态：已停止")

@@ -7,6 +7,7 @@ from .strategy import StrategyPage
 from .tasks import TasksPage
 from .mentor import MentorPage
 from .dataset import DatasetPage
+from .harness import HarnessPage
 
 
 class MainWindow(QMainWindow):
@@ -15,7 +16,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("MHXY Agent")
         self.resize(1180, 760)
         self.nav = QListWidget()
-        self.nav.addItems(["总览", "Strategy Brain", "今日任务", "师门任务", "视觉训练"])
+        self.nav.addItems(["总览", "Strategy Brain", "今日任务", "师门任务", "视觉训练", "Harness 控制"])
         self.nav.setFixedWidth(180)
         self.stack = QStackedWidget()
         self.stack.addWidget(DashboardPage())
@@ -23,6 +24,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(TasksPage())
         self.stack.addWidget(MentorPage())
         self.stack.addWidget(DatasetPage())
+        self.stack.addWidget(HarnessPage())
         self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
         self.nav.setCurrentRow(0)
 

@@ -4,3 +4,4 @@ pydantic>=2.7,<3
 pywin32>=306; platform_system == "Windows"
 Pillow>=10.0,<12
 pytesseract>=0.3.13
+rapidocr_onnxruntime>=1.4,<2

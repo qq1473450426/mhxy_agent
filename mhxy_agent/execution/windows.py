@@ -14,12 +14,16 @@ class WindowInfo:
 class WindowsObserver:
     def __init__(self, title_keyword: str = "") -> None:
         self.title_keyword = title_keyword.strip()
+        self.last_error = ""
 
     def list_windows(self) -> List[WindowInfo]:
+        self.last_error = ""
         try:
             import win32gui  # type: ignore
-        except ImportError:
+        except ImportError as exc:
+            self.last_error = f"未安装 pywin32：{exc}"
             return []
+
         found: List[WindowInfo] = []
 
         def callback(hwnd: int, _extra: object) -> None:
@@ -29,7 +33,10 @@ class WindowsObserver:
             if title:
                 found.append(WindowInfo(title=title, handle=hwnd))
 
-        win32gui.EnumWindows(callback, None)
+        try:
+            win32gui.EnumWindows(callback, None)
+        except Exception as exc:
+            self.last_error = f"枚举 Windows 窗口失败：{exc}"
         return found
 
     def find_window(self) -> Optional[WindowInfo]:
@@ -48,11 +55,13 @@ class WindowsObserver:
         return None
 
     def observe(self) -> dict:
+        windows = self.list_windows()
         window = self.find_window()
         if window is None:
+            message = self.last_error or "未找到匹配窗口；请刷新窗口列表并选择实际游戏窗口标题"
             return {
                 "connected": False,
-                "message": "未找到匹配窗口；请刷新窗口列表并选择实际游戏窗口标题",
-                "windows": [w.title for w in self.list_windows()],
+                "message": message,
+                "windows": [w.title for w in windows],
             }
         return {"connected": True, "title": window.title, "handle": window.handle}

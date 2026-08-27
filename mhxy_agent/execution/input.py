@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import ctypes
+import math
+import random
+import time
 from ctypes import wintypes
 from dataclasses import dataclass
+from typing import Tuple
 
 
 @dataclass(frozen=True)
@@ -27,12 +31,26 @@ class WindowsInput:
             except Exception:
                 pass
 
-    def click(self, handle: int, point: Point) -> tuple[bool, str]:
+    def click(
+        self,
+        handle: int,
+        point: Point,
+        move_duration: float = 0.45,
+        settle_delay: float = 0.12,
+    ) -> Tuple[bool, str]:
+        """Move the visible system cursor to the target, pause, then click.
+
+        The cursor is moved in small visible steps instead of teleporting with
+        absolute SendInput coordinates. This makes coordinate debugging possible
+        and avoids capture/absolute-coordinate scaling mismatches.
+        """
         try:
             import win32gui  # type: ignore
+            import win32api  # type: ignore
         except ImportError as exc:
             return False, f"缺少 Windows 输入依赖：{exc}"
 
+        screen_x = screen_y = 0
         try:
             if not win32gui.IsWindow(handle):
                 return False, "目标窗口无效"
@@ -50,66 +68,51 @@ class WindowsInput:
             except Exception:
                 pass
 
-            if self._send_input_click(screen_x, screen_y):
-                return True, f"鼠标点击完成：窗口相对坐标 ({point.x},{point.y})，屏幕坐标 ({screen_x},{screen_y})，方式=SendInput"
+            start = win32api.GetCursorPos()
+            self._human_move(win32api, start, (screen_x, screen_y), move_duration)
+            time.sleep(max(0.0, settle_delay))
 
-            # Compatibility fallback for clients that reject SendInput's absolute move.
-            try:
-                import win32api  # type: ignore
-                win32api.SetCursorPos((screen_x, screen_y))
-                win32api.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
-                win32api.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
-                return True, f"鼠标点击完成：窗口相对坐标 ({point.x},{point.y})，屏幕坐标 ({screen_x},{screen_y})，方式=win32api fallback"
-            except Exception as exc:
-                err = ctypes.get_last_error()
-                return False, f"鼠标点击失败：SendInput/Win32 fallback 均失败，屏幕坐标 ({screen_x},{screen_y})，Win32Error={err}，fallback={exc}"
+            # The cursor is already visibly positioned at the target. Press/release there.
+            win32api.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
+            time.sleep(0.055)
+            win32api.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
+
+            actual = win32api.GetCursorPos()
+            return True, (
+                f"鼠标点击完成：窗口相对坐标 ({point.x},{point.y})，"
+                f"屏幕坐标 ({screen_x},{screen_y})，移动=可见轨迹，"
+                f"耗时≈{move_duration:.2f}s，最终光标=({actual[0]},{actual[1]})"
+            )
         except Exception as exc:
-            return False, f"鼠标点击失败：{exc}"
+            err = ctypes.get_last_error()
+            return False, f"鼠标点击失败：目标屏幕坐标 ({screen_x},{screen_y})，Win32Error={err}，异常={exc}"
 
     @staticmethod
-    def _send_input_click(x: int, y: int) -> bool:
-        user32 = ctypes.windll.user32
-        screen_w = user32.GetSystemMetrics(0)
-        screen_h = user32.GetSystemMetrics(1)
-        if screen_w <= 1 or screen_h <= 1:
-            return False
+    def _human_move(win32api: object, start: Tuple[int, int], end: Tuple[int, int], duration: float) -> None:
+        """Move the real cursor along a smooth, slightly curved human-visible path."""
+        sx, sy = start
+        ex, ey = end
+        distance = math.hypot(ex - sx, ey - sy)
+        if distance < 1:
+            return
 
-        abs_x = round(x * 65535 / (screen_w - 1))
-        abs_y = round(y * 65535 / (screen_h - 1))
-        ULONG_PTR = ctypes.c_size_t
+        duration = max(0.18, min(0.9, duration * (0.75 + min(distance / 800.0, 0.75))))
+        steps = max(12, min(60, int(distance / 12)))
 
-        class MOUSEINPUT(ctypes.Structure):
-            _fields_ = [
-                ("dx", wintypes.LONG),
-                ("dy", wintypes.LONG),
-                ("mouseData", wintypes.DWORD),
-                ("dwFlags", wintypes.DWORD),
-                ("time", wintypes.DWORD),
-                ("dwExtraInfo", ULONG_PTR),
-            ]
+        nx = -(ey - sy) / distance
+        ny = (ex - sx) / distance
+        curve = min(18.0, max(3.0, distance * 0.035))
+        curve *= 1.0 if random.random() >= 0.5 else -1.0
+        cx = (sx + ex) / 2.0 + nx * curve
+        cy = (sy + ey) / 2.0 + ny * curve
 
-        class INPUT_UNION(ctypes.Union):
-            _fields_ = [("mi", MOUSEINPUT)]
+        for i in range(1, steps + 1):
+            t = i / steps
+            u = t * t * (3.0 - 2.0 * t)  # smoothstep timing
+            one = 1.0 - u
+            x = one * one * sx + 2 * one * u * cx + u * u * ex
+            y = one * one * sy + 2 * one * u * cy + u * u * ey
+            win32api.SetCursorPos((round(x), round(y)))
+            time.sleep(duration / steps)
 
-        class INPUT(ctypes.Structure):
-            _anonymous_ = ("u",)
-            _fields_ = [("type", wintypes.DWORD), ("u", INPUT_UNION)]
-
-        def make_input(dx: int, dy: int, flags: int) -> INPUT:
-            item = INPUT()
-            item.type = 0
-            item.mi.dx = dx
-            item.mi.dy = dy
-            item.mi.mouseData = 0
-            item.mi.dwFlags = flags
-            item.mi.time = 0
-            item.mi.dwExtraInfo = 0
-            return item
-
-        move = make_input(abs_x, abs_y, 0x0001 | 0x8000)
-        if user32.SendInput(1, ctypes.byref(move), ctypes.sizeof(INPUT)) != 1:
-            return False
-        down = make_input(0, 0, 0x0002)
-        up = make_input(0, 0, 0x0004)
-        inputs = (INPUT * 2)(down, up)
-        return user32.SendInput(2, inputs, ctypes.sizeof(INPUT)) == 2
+        win32api.SetCursorPos((ex, ey))

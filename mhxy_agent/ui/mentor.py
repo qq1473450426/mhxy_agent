@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from time import perf_counter
 from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QTextEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QTextEdit, QVBoxLayout, QWidget
 
 from ..config import AppConfig
 from ..execution.game_session import GameSession
@@ -16,7 +17,7 @@ from ..execution.visual_debug import render_debug
 
 
 class MentorPage(QWidget):
-    """Real-window mentor workflow with isolated task-panel OCR and click preview."""
+    """Real-window mentor workflow with fast OCR-first observation."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -27,7 +28,7 @@ class MentorPage(QWidget):
         self.last_action = None
         self.last_image = None
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("师门任务 · YOLO + OCR 视觉模式"))
+        layout.addWidget(QLabel("师门任务 · OCR快速模式 / YOLO可选"))
 
         row = QHBoxLayout()
         row.addWidget(QLabel("游戏窗口："))
@@ -46,15 +47,18 @@ class MentorPage(QWidget):
         buttons = QHBoxLayout()
         observe = QPushButton("截图 / 识别")
         observe.clicked.connect(self.observe_real)
-        self.step = QPushButton("执行识别动作")
-        self.step.clicked.connect(self.execute_one)
-        self.step.setEnabled(False)
         self.move_test = QPushButton("移动到目标（不点击）")
         self.move_test.clicked.connect(self.move_to_target)
         self.move_test.setEnabled(False)
+        self.step = QPushButton("执行识别动作")
+        self.step.clicked.connect(self.execute_one)
+        self.step.setEnabled(False)
         stop = QPushButton("停止")
         stop.clicked.connect(self.stop)
+        self.yolo_check = QCheckBox("启用YOLO（较慢）")
+        self.yolo_check.setChecked(False)
         buttons.addWidget(observe)
+        buttons.addWidget(self.yolo_check)
         buttons.addWidget(self.move_test)
         buttons.addWidget(self.step)
         buttons.addWidget(stop)
@@ -77,12 +81,9 @@ class MentorPage(QWidget):
         if self.last_image is None:
             return
         path = render_debug(
-            self.last_image,
-            (),
-            (),
+            self.last_image, (), (),
             output="data/latest_click_target.png" if result is None else "data/latest_click_result.png",
-            click_point=click_point,
-            click_result=result,
+            click_point=click_point, click_result=result,
         )
         self._show_preview(path)
 
@@ -115,7 +116,9 @@ class MentorPage(QWidget):
             self.connect_selected()
         if self.session.window is None:
             return
+        t0 = perf_counter()
         result = self.session.snapshot()
+        capture_ms = (perf_counter() - t0) * 1000
         if not result.ok or result.image is None:
             self.output.append(result.message)
             self.status.setText("状态：截图失败")
@@ -126,24 +129,28 @@ class MentorPage(QWidget):
         path.parent.mkdir(parents=True, exist_ok=True)
         image.save(path)
 
-        fused = self.fusion.analyze(image)
+        t1 = perf_counter()
         task_ocr = self.task_ocr.analyze(image)
+        ocr_ms = (perf_counter() - t1) * 1000
+        t2 = perf_counter()
+        fused = self.fusion.analyze(image, use_yolo=self.yolo_check.isChecked())
+        vision_ms = (perf_counter() - t2) * 1000
         self.last_action = self.detector.detect(task_ocr, image)
         debug_path = render_debug(image, fused.yolo, task_ocr.regions)
         self._show_preview(debug_path)
 
-        self.output.append(f"截图成功：{image.size[0]}x{image.size[1]}")
+        self.output.append(f"截图成功：{image.size[0]}x{image.size[1]}；截图耗时={capture_ms:.0f}ms")
         self.output.append(f"任务面板 OCR ROI：x≥{int(image.size[0] * self.task_ocr.x_ratio)}，y≥{int(image.size[1] * self.task_ocr.y_ratio)}")
-        self.output.append(f"任务面板 OCR：{task_ocr.text or '未识别到文字'}")
-        self.output.append(f"任务面板 OCR区域：{len(task_ocr.regions)}")
-        self.output.append(f"YOLO检测：{len(fused.yolo)}")
-        if fused.yolo:
+        self.output.append(f"任务面板 OCR：{task_ocr.text or '未识别到文字'}；OCR耗时={ocr_ms:.0f}ms")
+        self.output.append(f"OCR区域：{len(task_ocr.regions)}")
+        if self.yolo_check.isChecked():
+            self.output.append(f"YOLO检测：{len(fused.yolo)}；YOLO耗时（含融合）={vision_ms:.0f}ms；设备={self.fusion.detector.device_name}")
             for target in fused.targets:
                 self.output.append(f"YOLO：{target.label} {target.confidence:.0%} box={target.box} OCR={target.ocr_text or '-'}")
-        elif self.fusion.detector.error:
-            self.output.append(f"YOLO：{self.fusion.detector.error}")
+            if not fused.yolo and self.fusion.detector.error:
+                self.output.append(f"YOLO：{self.fusion.detector.error}")
         else:
-            self.output.append("YOLO：当前画面未检测到目标")
+            self.output.append(f"YOLO：已跳过；省略约 {vision_ms:.0f}ms 推理")
 
         if self.last_action is None:
             self.step.setEnabled(False)
@@ -164,12 +171,9 @@ class MentorPage(QWidget):
         point = self.last_action.point
         self._render_target(point)
         self.output.append(f"开始可见鼠标移动：窗口相对坐标 {point}；本次仅移动，不点击。")
-        ok, message = self.session.move_cursor(point[0], point[1], duration=0.9)
+        ok, message = self.session.move_cursor(point[0], point[1], duration=0.45)
         self.output.append(message)
-        if ok:
-            self.status.setText("状态：鼠标已到目标位置（未点击）")
-        else:
-            self.status.setText("状态：鼠标移动失败")
+        self.status.setText("状态：鼠标已到目标位置（未点击）" if ok else "状态：鼠标移动失败")
 
     def execute_one(self) -> None:
         if self.last_action is None or self.last_action.point is None:
@@ -179,9 +183,8 @@ class MentorPage(QWidget):
         point = self.last_action.point
         self._render_target(point)
         answer = QMessageBox.question(
-            self,
-            "确认执行",
-            f"识别目标：{self.last_action.target}\n窗口相对坐标：{point}\n\n执行时鼠标会以可见轨迹移动到绿色十字，停留后再左键点击。\n请确认它落在右侧任务面板红色“师父”文字上。\n\n确认后才会真实点击一次。",
+            self, "确认执行",
+            f"识别目标：{self.last_action.target}\n窗口相对坐标：{point}\n\n鼠标会沿可见轨迹移动到绿色十字后左键点击。\n请确认它位于右侧任务面板红色文字上。",
         )
         if answer != QMessageBox.Yes:
             self.output.append("用户取消执行；未发送鼠标输入。")

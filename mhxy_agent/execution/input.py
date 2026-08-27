@@ -14,10 +14,10 @@ class Point:
 
 
 class WindowsInput:
-    """Visible Windows mouse input implemented with pywin32.
+    """Windows mouse input via pywin32.
 
-    Coordinates are pixels relative to the full game window rectangle.
-    The cursor is moved through several real desktop positions before a click.
+    Coordinates are relative to the selected game window. Movement is visible
+    and verified after every move so coordinate/input failures are explicit.
     """
 
     def __init__(self) -> None:
@@ -43,8 +43,10 @@ class WindowsInput:
         return True, "", left + point.x, top + point.y
 
     def _move_cursor(self, x: int, y: int) -> None:
-        """Use pywin32 MoveTo, not SetCursorPos/SendInput/PyAutoGUI."""
-        self.win32api.MoveTo(int(x), int(y))
+        # pywin32 exposes SetCursorPos as a single tuple argument. There is no
+        # win32api.MoveTo API; the previous implementation therefore failed
+        # before a single mouse movement was attempted.
+        self.win32api.SetCursorPos((int(x), int(y)))
 
     def move_to(self, handle: int, point: Point, duration: float = 0.45) -> Tuple[bool, str]:
         ok, msg, sx, sy = self._screen_point(handle, point)
@@ -71,14 +73,14 @@ class WindowsInput:
                     t = i / steps
                     u = t * t * (3.0 - 2.0 * t)
                     one = 1.0 - u
-                    x = one * one * start[0] + 2 * one * u * cx + u * u * sx
-                    y = one * one * start[1] + 2 * one * u * cy + u * u * sy
-                    self._move_cursor(round(x), round(y))
+                    px = one * one * start[0] + 2 * one * u * cx + u * u * sx
+                    py = one * one * start[1] + 2 * one * u * cy + u * u * sy
+                    self._move_cursor(round(px), round(py))
                     time.sleep(duration / steps)
                 self._move_cursor(sx, sy)
             actual = self.win32api.GetCursorPos()
             if abs(actual[0] - sx) <= 3 and abs(actual[1] - sy) <= 3:
-                return True, f"鼠标移动完成：窗口({point.x},{point.y}) → 屏幕({sx},{sy}) → 实际({actual[0]},{actual[1]})，方式=pywin32.MoveTo"
+                return True, f"鼠标移动完成：窗口({point.x},{point.y}) → 屏幕({sx},{sy}) → 实际({actual[0]},{actual[1]})，方式=pywin32.SetCursorPos"
             return False, f"鼠标移动后坐标异常：目标({sx},{sy})，实际({actual[0]},{actual[1]})"
         except Exception as exc:
             return False, f"pywin32鼠标移动失败：目标屏幕({sx},{sy})，异常={exc}"

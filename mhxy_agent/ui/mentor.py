@@ -10,6 +10,7 @@ from ..config import AppConfig
 from ..execution.game_session import GameSession
 from ..execution.mentor_detector import MentorTargetDetector
 from ..execution.vision_fusion import VisionFusion
+from ..execution.visual_debug import render_debug
 
 
 class MentorPage(QWidget):
@@ -98,12 +99,18 @@ class MentorPage(QWidget):
         path = Path("data/latest_game_capture.png")
         path.parent.mkdir(parents=True, exist_ok=True)
         image.save(path)
-        self.preview.setPixmap(QPixmap(str(path)).scaled(self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
         fused = self.fusion.analyze(image)
-        self.last_action = self.detector.detect(fused.ocr)
+        self.last_action = self.detector.detect(fused.ocr, image)
+
+        # Render an independent debug image so the original capture remains intact.
+        debug_path = render_debug(image, fused.yolo, fused.ocr.regions)
+        self.preview.setPixmap(QPixmap(str(debug_path)).scaled(self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
         self.output.append(f"截图成功：{image.size[0]}x{image.size[1]}")
         self.output.append(f"OCR：{fused.ocr.text or '未识别到文字'}")
+        self.output.append(f"OCR区域：{len(fused.ocr.regions)}")
+        self.output.append(f"YOLO检测：{len(fused.yolo)}")
         if fused.yolo:
             for target in fused.targets:
                 self.output.append(f"YOLO：{target.label} {target.confidence:.0%} box={target.box} OCR={target.ocr_text or '-'}")
@@ -114,11 +121,12 @@ class MentorPage(QWidget):
 
         if self.last_action is None:
             self.step.setEnabled(False)
-            self.output.append("未找到师门目标，不执行点击。")
+            self.output.append("未找到师门任务红色链接，不执行点击。")
             self.status.setText("状态：已截图，未找到目标")
         else:
             self.step.setEnabled(True)
             self.output.append(f"候选目标：{self.last_action.target}；窗口相对坐标：{self.last_action.point}")
+            self.output.append("目标策略：优先点击任务面板中的红色文字链接，而不是 NPC 角色模型。")
             self.status.setText("状态：已识别，可执行一步")
 
     def execute_one(self) -> None:

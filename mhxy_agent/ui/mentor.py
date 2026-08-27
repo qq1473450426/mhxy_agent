@@ -11,7 +11,7 @@ from ..execution.vision import VisionEngine
 
 
 class MentorPage(QWidget):
-    """Real-window mentor workflow: observe -> detect -> explicit click."""
+    """Real-window mentor workflow: select -> observe -> detect -> explicit click."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -19,21 +19,22 @@ class MentorPage(QWidget):
         self.vision = VisionEngine()
         self.detector = MentorTargetDetector()
         self.last_action = None
-
         layout = QVBoxLayout(self)
-        title = QLabel("师门任务 · 真实窗口单步模式")
-        title.setStyleSheet("font-size: 22px; font-weight: 700;")
-        layout.addWidget(title)
+        layout.addWidget(QLabel("师门任务 · 真实窗口单步模式"))
+
         row = QHBoxLayout()
-        row.addWidget(QLabel("窗口关键词："))
-        self.keyword = QComboBox()
-        self.keyword.setEditable(True)
-        self.keyword.addItem(AppConfig.from_env().game_window_keyword)
-        row.addWidget(self.keyword, 1)
-        connect = QPushButton("连接游戏")
-        connect.clicked.connect(self.connect_game)
+        row.addWidget(QLabel("游戏窗口："))
+        self.window_box = QComboBox()
+        self.window_box.setEditable(True)
+        row.addWidget(self.window_box, 1)
+        refresh = QPushButton("刷新窗口")
+        refresh.clicked.connect(self.refresh_windows)
+        row.addWidget(refresh)
+        connect = QPushButton("连接所选窗口")
+        connect.clicked.connect(self.connect_selected)
         row.addWidget(connect)
         layout.addLayout(row)
+
         self.status = QLabel("状态：未连接")
         layout.addWidget(self.status)
         buttons = QHBoxLayout()
@@ -47,6 +48,7 @@ class MentorPage(QWidget):
         buttons.addWidget(step)
         buttons.addWidget(stop)
         layout.addLayout(buttons)
+
         self.preview = QLabel("暂无截图")
         self.preview.setAlignment(Qt.AlignCenter)
         self.preview.setMinimumHeight(260)
@@ -55,35 +57,52 @@ class MentorPage(QWidget):
         self.output = QTextEdit()
         self.output.setReadOnly(True)
         layout.addWidget(self.output, 1)
+        self.refresh_windows()
 
-    def connect_game(self) -> None:
-        self.session = GameSession(self.keyword.currentText().strip())
-        ok, message = self.session.connect()
+    def refresh_windows(self) -> None:
+        windows = self.session.observer.list_windows()
+        self.window_box.clear()
+        for window in windows:
+            self.window_box.addItem(window.title, window.handle)
+        self.output.append(f"发现 {len(windows)} 个可见窗口")
+
+    def connect_selected(self) -> None:
+        handle = self.window_box.currentData()
+        title = self.window_box.currentText().strip()
+        if handle is not None:
+            window = self.session.observer.find_by_handle(int(handle))
+            if window is None:
+                ok, message = False, "所选窗口已不存在，请刷新窗口列表"
+            else:
+                self.session.window = window
+                ok, message = True, f"已连接：{window.title} (HWND={window.handle})"
+        elif title:
+            self.session = GameSession(title)
+            ok, message = self.session.connect()
+        else:
+            ok, message = False, "请先刷新并选择窗口"
         self.status.setText("状态：已连接" if ok else "状态：未连接")
         self.output.append(message)
 
     def observe_real(self) -> None:
         if self.session.window is None:
-            self.connect_game()
+            self.connect_selected()
         if self.session.window is None:
             return
         result = self.session.snapshot()
-        if not hasattr(result, "ok") or not result.ok:
+        if not getattr(result, "ok", False):
             self.output.append(getattr(result, "message", "截图失败"))
             return
         image = result.image
         if image is None:
+            self.output.append("截图为空")
             return
         image.save("data/latest_game_capture.png")
-        pixmap = QPixmap("data/latest_game_capture.png")
-        self.preview.setPixmap(pixmap.scaled(self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        self.preview.setPixmap(QPixmap("data/latest_game_capture.png").scaled(self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
         vision = self.vision.analyze(image)
         self.last_action = self.detector.detect(vision)
         self.output.append(f"OCR：{vision.text or '未识别到文字'}")
-        if self.last_action is None:
-            self.output.append("未找到师门目标，不执行点击。")
-        else:
-            self.output.append(f"目标：{self.last_action.target}；坐标：{self.last_action.point}")
+        self.output.append("未找到师门目标，不执行点击。" if self.last_action is None else f"目标：{self.last_action.target}；坐标：{self.last_action.point}")
 
     def execute_one(self) -> None:
         if self.last_action is None or self.last_action.point is None:

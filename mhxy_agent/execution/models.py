@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Optional, Tuple
 
 
 class ActionKind(str, Enum):
@@ -15,16 +16,17 @@ class ActionKind(str, Enum):
 class Action:
     kind: ActionKind
     description: str
-    target: str | None = None
+    target: Optional[str] = None
     requires_confirmation: bool = False
+    point: Optional[Tuple[int, int]] = None
 
 
 @dataclass(frozen=True)
 class Observation:
     scene: str
     task_text: str = ""
-    npc: str | None = None
-    position: str | None = None
+    npc: Optional[str] = None
+    position: Optional[str] = None
 
 
 @dataclass(frozen=True)

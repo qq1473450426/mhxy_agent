@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import ctypes
+import math
+import random
 import time
 from dataclasses import dataclass
 from typing import Tuple
@@ -13,75 +14,84 @@ class Point:
 
 
 class WindowsInput:
-    """Visible desktop mouse input. PyAutoGUI is primary; user32 is fallback."""
+    """Visible Windows mouse input implemented with pywin32.
+
+    Coordinates are pixels relative to the full game window rectangle.
+    The cursor is moved through several real desktop positions before a click.
+    """
 
     def __init__(self) -> None:
-        self._pyautogui = None
         try:
-            import pyautogui  # type: ignore
-            pyautogui.FAILSAFE = False
-            pyautogui.PAUSE = 0.02
-            self._pyautogui = pyautogui
-        except Exception:
-            pass
+            import win32api  # type: ignore
+            import win32con  # type: ignore
+            import win32gui  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError(f"缺少 pywin32：{exc}") from exc
+        self.win32api = win32api
+        self.win32con = win32con
+        self.win32gui = win32gui
 
     def _screen_point(self, handle: int, point: Point) -> Tuple[bool, str, int, int]:
-        try:
-            import win32gui  # type: ignore
-            if not win32gui.IsWindow(handle):
-                return False, "目标窗口无效", 0, 0
-            left, top, right, bottom = win32gui.GetWindowRect(handle)
-            width, height = right - left, bottom - top
-            if width <= 0 or height <= 0:
-                return False, "窗口尺寸无效", 0, 0
-            if not (0 <= point.x < width and 0 <= point.y < height):
-                return False, f"相对坐标超出窗口范围：({point.x},{point.y}) / {width}x{height}", 0, 0
-            return True, "", left + point.x, top + point.y
-        except Exception as exc:
-            return False, f"获取窗口坐标失败：{exc}", 0, 0
+        if not self.win32gui.IsWindow(handle):
+            return False, "目标窗口无效", 0, 0
+        left, top, right, bottom = self.win32gui.GetWindowRect(handle)
+        width, height = right - left, bottom - top
+        if width <= 0 or height <= 0:
+            return False, "窗口尺寸无效", 0, 0
+        if not (0 <= point.x < width and 0 <= point.y < height):
+            return False, f"相对坐标超出窗口范围：({point.x},{point.y}) / {width}x{height}", 0, 0
+        return True, "", left + point.x, top + point.y
 
-    def move_to(self, handle: int, point: Point, duration: float = 0.65) -> Tuple[bool, str]:
+    def _move_cursor(self, x: int, y: int) -> None:
+        """Use pywin32 MoveTo, not SetCursorPos/SendInput/PyAutoGUI."""
+        self.win32api.MoveTo(int(x), int(y))
+
+    def move_to(self, handle: int, point: Point, duration: float = 0.45) -> Tuple[bool, str]:
         ok, msg, sx, sy = self._screen_point(handle, point)
         if not ok:
             return False, msg
         try:
-            import win32gui  # type: ignore
-            win32gui.SetForegroundWindow(handle)
+            self.win32gui.SetForegroundWindow(handle)
         except Exception:
             pass
-
-        if self._pyautogui is not None:
-            try:
-                self._pyautogui.moveTo(sx, sy, duration=max(0.2, min(1.2, duration)), tween=self._pyautogui.easeInOutQuad)
-                actual = self._pyautogui.position()
-                if abs(actual.x - sx) <= 3 and abs(actual.y - sy) <= 3:
-                    return True, f"鼠标移动完成：窗口({point.x},{point.y}) → 屏幕({sx},{sy}) → 实际({actual.x},{actual.y})，方式=PyAutoGUI"
-            except Exception:
-                pass
-
         try:
-            if bool(ctypes.windll.user32.SetCursorPos(int(sx), int(sy))):
-                return True, f"鼠标移动完成：窗口({point.x},{point.y}) → 屏幕({sx},{sy})，方式=user32"
-        except Exception:
-            pass
-        return False, f"鼠标移动失败：目标屏幕({sx},{sy})，PyAutoGUI和user32均失败"
+            start = self.win32api.GetCursorPos()
+            distance = math.hypot(sx - start[0], sy - start[1])
+            if distance < 2:
+                self._move_cursor(sx, sy)
+            else:
+                duration = max(0.18, min(0.8, duration))
+                steps = max(12, min(50, int(distance / 14)))
+                nx = -(sy - start[1]) / distance
+                ny = (sx - start[0]) / distance
+                curve = random.uniform(-10.0, 10.0)
+                cx = (start[0] + sx) / 2.0 + nx * curve
+                cy = (start[1] + sy) / 2.0 + ny * curve
+                for i in range(1, steps + 1):
+                    t = i / steps
+                    u = t * t * (3.0 - 2.0 * t)
+                    one = 1.0 - u
+                    x = one * one * start[0] + 2 * one * u * cx + u * u * sx
+                    y = one * one * start[1] + 2 * one * u * cy + u * u * sy
+                    self._move_cursor(round(x), round(y))
+                    time.sleep(duration / steps)
+                self._move_cursor(sx, sy)
+            actual = self.win32api.GetCursorPos()
+            if abs(actual[0] - sx) <= 3 and abs(actual[1] - sy) <= 3:
+                return True, f"鼠标移动完成：窗口({point.x},{point.y}) → 屏幕({sx},{sy}) → 实际({actual[0]},{actual[1]})，方式=pywin32.MoveTo"
+            return False, f"鼠标移动后坐标异常：目标({sx},{sy})，实际({actual[0]},{actual[1]})"
+        except Exception as exc:
+            return False, f"pywin32鼠标移动失败：目标屏幕({sx},{sy})，异常={exc}"
 
-    def click(self, handle: int, point: Point, move_duration: float = 0.65, settle_delay: float = 0.15) -> Tuple[bool, str]:
+    def click(self, handle: int, point: Point, move_duration: float = 0.45, settle_delay: float = 0.12) -> Tuple[bool, str]:
         ok, message = self.move_to(handle, point, duration=move_duration)
         if not ok:
             return False, message
-        time.sleep(max(0.0, settle_delay))
-        if self._pyautogui is not None:
-            try:
-                self._pyautogui.click(button="left")
-                return True, message + f"；PyAutoGUI左键完成，停留={settle_delay:.2f}s"
-            except Exception:
-                pass
         try:
-            user32 = ctypes.windll.user32
-            user32.mouse_event(0x0002, 0, 0, 0, 0)
-            time.sleep(0.07)
-            user32.mouse_event(0x0004, 0, 0, 0, 0)
-            return True, message + "；user32左键完成"
+            time.sleep(max(0.0, settle_delay))
+            self.win32api.mouse_event(self.win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+            time.sleep(0.06)
+            self.win32api.mouse_event(self.win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            return True, message + f"；pywin32左键完成，停留={settle_delay:.2f}s"
         except Exception as exc:
-            return False, f"鼠标点击失败：{exc}"
+            return False, f"pywin32鼠标点击失败：{exc}"

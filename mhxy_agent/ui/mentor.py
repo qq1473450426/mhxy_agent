@@ -47,6 +47,8 @@ class MentorPage(QWidget):
         buttons = QHBoxLayout()
         observe = QPushButton("截图 / 识别")
         observe.clicked.connect(self.observe_real)
+        self.yolo_check = QCheckBox("启用YOLO（较慢）")
+        self.yolo_check.setChecked(False)
         self.move_test = QPushButton("移动到目标（不点击）")
         self.move_test.clicked.connect(self.move_to_target)
         self.move_test.setEnabled(False)
@@ -55,8 +57,6 @@ class MentorPage(QWidget):
         self.step.setEnabled(False)
         stop = QPushButton("停止")
         stop.clicked.connect(self.stop)
-        self.yolo_check = QCheckBox("启用YOLO（较慢）")
-        self.yolo_check.setChecked(False)
         buttons.addWidget(observe)
         buttons.addWidget(self.yolo_check)
         buttons.addWidget(self.move_test)
@@ -133,8 +133,9 @@ class MentorPage(QWidget):
         task_ocr = self.task_ocr.analyze(image)
         ocr_ms = (perf_counter() - t1) * 1000
         t2 = perf_counter()
-        fused = self.fusion.analyze(image, use_yolo=self.yolo_check.isChecked())
-        vision_ms = (perf_counter() - t2) * 1000
+        use_yolo = self.yolo_check.isChecked()
+        fused = self.fusion.analyze(image, use_yolo=use_yolo, ocr_result=task_ocr)
+        yolo_ms = (perf_counter() - t2) * 1000 if use_yolo else 0.0
         self.last_action = self.detector.detect(task_ocr, image)
         debug_path = render_debug(image, fused.yolo, task_ocr.regions)
         self._show_preview(debug_path)
@@ -143,14 +144,14 @@ class MentorPage(QWidget):
         self.output.append(f"任务面板 OCR ROI：x≥{int(image.size[0] * self.task_ocr.x_ratio)}，y≥{int(image.size[1] * self.task_ocr.y_ratio)}")
         self.output.append(f"任务面板 OCR：{task_ocr.text or '未识别到文字'}；OCR耗时={ocr_ms:.0f}ms")
         self.output.append(f"OCR区域：{len(task_ocr.regions)}")
-        if self.yolo_check.isChecked():
-            self.output.append(f"YOLO检测：{len(fused.yolo)}；YOLO耗时（含融合）={vision_ms:.0f}ms；设备={self.fusion.detector.device_name}")
+        if use_yolo:
+            self.output.append(f"YOLO检测：{len(fused.yolo)}；YOLO耗时={yolo_ms:.0f}ms；设备={self.fusion.detector.device_name}")
             for target in fused.targets:
                 self.output.append(f"YOLO：{target.label} {target.confidence:.0%} box={target.box} OCR={target.ocr_text or '-'}")
             if not fused.yolo and self.fusion.detector.error:
                 self.output.append(f"YOLO：{self.fusion.detector.error}")
         else:
-            self.output.append(f"YOLO：已跳过；省略约 {vision_ms:.0f}ms 推理")
+            self.output.append("YOLO：未启用，本次未运行模型")
 
         if self.last_action is None:
             self.step.setEnabled(False)

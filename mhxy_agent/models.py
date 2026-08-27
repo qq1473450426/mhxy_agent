@@ -1,6 +1,9 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
+Stability = Literal["S", "A", "B", "C", "D"]
+
+
 @dataclass
 class Account:
     name: str = ""
@@ -11,6 +14,7 @@ class Account:
     hp: int = 0
     mp: int = 0
     status: str = "idle"
+
 
 @dataclass
 class GameProfile:
@@ -30,6 +34,16 @@ class GameProfile:
     def average_level(self) -> float:
         return sum(a.level for a in self.accounts) / len(self.accounts) if self.accounts else 0.0
 
+    @classmethod
+    def example(cls) -> "GameProfile":
+        return cls(
+            server="示例新区",
+            version="simulation",
+            online_hours=4.0,
+            accounts=[Account(name=f"角色{i}", school="未知", level=69, status="idle") for i in range(1, 6)],
+        )
+
+
 @dataclass(frozen=True)
 class Task:
     name: str
@@ -40,7 +54,7 @@ class Task:
     growth: float = 0.0
     cost: float = 0.0
     risk: float = 0.0
-    stability: Literal["S", "A", "B", "C", "D"] = "B"
+    stability: Stability = "B"
 
     @property
     def net_profit(self) -> float:
@@ -49,3 +63,11 @@ class Task:
     @property
     def profit_per_hour(self) -> float:
         return self.net_profit / self.hours if self.hours > 0 else 0.0
+
+    @property
+    def priority(self) -> str:
+        return {"S": "P0", "A": "P1", "B": "P2", "C": "P3", "D": "P4"}[self.stability]
+
+    @property
+    def expected_profit(self) -> float:
+        return self.profit_per_hour

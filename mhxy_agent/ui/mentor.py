@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QTextEdit, QVBoxLayout, QWidget
@@ -11,7 +13,7 @@ from ..execution.vision import VisionEngine
 
 
 class MentorPage(QWidget):
-    """Real-window mentor workflow: select -> observe -> detect -> explicit click."""
+    """Real-window mentor workflow: select -> capture -> detect -> confirm -> click."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -25,7 +27,6 @@ class MentorPage(QWidget):
         row = QHBoxLayout()
         row.addWidget(QLabel("游戏窗口："))
         self.window_box = QComboBox()
-        self.window_box.setEditable(True)
         row.addWidget(self.window_box, 1)
         refresh = QPushButton("刷新窗口")
         refresh.clicked.connect(self.refresh_windows)
@@ -40,12 +41,13 @@ class MentorPage(QWidget):
         buttons = QHBoxLayout()
         observe = QPushButton("截图 / 识别")
         observe.clicked.connect(self.observe_real)
-        step = QPushButton("执行识别动作")
-        step.clicked.connect(self.execute_one)
+        self.step = QPushButton("执行识别动作")
+        self.step.clicked.connect(self.execute_one)
+        self.step.setEnabled(False)
         stop = QPushButton("停止")
         stop.clicked.connect(self.stop)
         buttons.addWidget(observe)
-        buttons.addWidget(step)
+        buttons.addWidget(self.step)
         buttons.addWidget(stop)
         layout.addLayout(buttons)
 
@@ -68,21 +70,19 @@ class MentorPage(QWidget):
 
     def connect_selected(self) -> None:
         handle = self.window_box.currentData()
-        title = self.window_box.currentText().strip()
-        if handle is not None:
-            window = self.session.observer.find_by_handle(int(handle))
-            if window is None:
-                ok, message = False, "所选窗口已不存在，请刷新窗口列表"
-            else:
-                self.session.window = window
-                ok, message = True, f"已连接：{window.title} (HWND={window.handle})"
-        elif title:
-            self.session = GameSession(title)
-            ok, message = self.session.connect()
-        else:
-            ok, message = False, "请先刷新并选择窗口"
-        self.status.setText("状态：已连接" if ok else "状态：未连接")
-        self.output.append(message)
+        if handle is None:
+            self.output.append("请先刷新并选择游戏窗口。")
+            return
+        window = self.session.observer.find_by_handle(int(handle))
+        if window is None:
+            self.status.setText("状态：未连接")
+            self.output.append("所选窗口已不存在，请刷新窗口列表。")
+            return
+        self.session.window = window
+        self.last_action = None
+        self.step.setEnabled(False)
+        self.status.setText("状态：已连接")
+        self.output.append(f"已连接：{window.title} (HWND={window.handle})")
 
     def observe_real(self) -> None:
         if self.session.window is None:
@@ -90,19 +90,27 @@ class MentorPage(QWidget):
         if self.session.window is None:
             return
         result = self.session.snapshot()
-        if not getattr(result, "ok", False):
-            self.output.append(getattr(result, "message", "截图失败"))
+        if not result.ok or result.image is None:
+            self.output.append(result.message)
+            self.status.setText("状态：截图失败")
             return
         image = result.image
-        if image is None:
-            self.output.append("截图为空")
-            return
-        image.save("data/latest_game_capture.png")
-        self.preview.setPixmap(QPixmap("data/latest_game_capture.png").scaled(self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        path = Path("data/latest_game_capture.png")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        image.save(path)
+        self.preview.setPixmap(QPixmap(str(path)).scaled(self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
         vision = self.vision.analyze(image)
         self.last_action = self.detector.detect(vision)
+        self.output.append(f"截图成功：{image.size[0]}x{image.size[1]}")
         self.output.append(f"OCR：{vision.text or '未识别到文字'}")
-        self.output.append("未找到师门目标，不执行点击。" if self.last_action is None else f"目标：{self.last_action.target}；坐标：{self.last_action.point}")
+        if self.last_action is None:
+            self.step.setEnabled(False)
+            self.output.append("未找到师门目标，不执行点击。")
+            self.status.setText("状态：已截图，未找到目标")
+        else:
+            self.step.setEnabled(True)
+            self.output.append(f"目标：{self.last_action.target}；窗口相对坐标：{self.last_action.point}")
+            self.status.setText("状态：已识别，可执行一步")
 
     def execute_one(self) -> None:
         if self.last_action is None or self.last_action.point is None:
@@ -110,7 +118,7 @@ class MentorPage(QWidget):
         if self.last_action is None or self.last_action.point is None:
             return
         point = self.last_action.point
-        answer = QMessageBox.question(self, "确认执行", f"识别目标：{self.last_action.target}\n坐标：{point}\n\n确认点击一次？")
+        answer = QMessageBox.question(self, "确认执行", f"识别目标：{self.last_action.target}\n窗口相对坐标：{point}\n\n确认点击一次？")
         if answer != QMessageBox.Yes:
             self.output.append("用户取消执行。")
             return
@@ -118,8 +126,10 @@ class MentorPage(QWidget):
         self.output.append(message)
         self.status.setText("状态：已执行一次" if ok else "状态：执行失败")
         self.last_action = None
+        self.step.setEnabled(False)
 
     def stop(self) -> None:
         self.last_action = None
+        self.step.setEnabled(False)
         self.output.append("执行已停止。")
         self.status.setText("状态：已停止")

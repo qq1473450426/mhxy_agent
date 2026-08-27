@@ -9,6 +9,7 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QTextEdit, QVBoxLayout, QWidget
 
 from ..config import AppConfig
+from ..execution.dialogue import DialogueDetector
 from ..execution.game_session import GameSession
 from ..execution.mentor_detector import MentorTargetDetector
 from ..execution.task_panel import TaskPanelOCR
@@ -17,15 +18,17 @@ from ..execution.visual_debug import render_debug
 
 
 class MentorPage(QWidget):
-    """Real-window mentor workflow with fast OCR-first observation."""
+    """Real-window mentor workflow with OCR-first observation."""
 
     def __init__(self) -> None:
         super().__init__()
         self.session = GameSession(AppConfig.from_env().game_window_keyword)
         self.fusion = VisionFusion()
         self.task_ocr = TaskPanelOCR()
+        self.dialogue = DialogueDetector()
         self.detector = MentorTargetDetector()
         self.last_action = None
+        self.last_dialogue = None
         self.last_image = None
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("师门任务 · OCR快速模式 / YOLO可选"))
@@ -55,12 +58,16 @@ class MentorPage(QWidget):
         self.step = QPushButton("执行识别动作")
         self.step.clicked.connect(self.execute_one)
         self.step.setEnabled(False)
+        self.dialogue_step = QPushButton("识别对话 / 师门任务")
+        self.dialogue_step.clicked.connect(self.detect_dialogue)
+        self.dialogue_step.setEnabled(False)
         stop = QPushButton("停止")
         stop.clicked.connect(self.stop)
         buttons.addWidget(observe)
         buttons.addWidget(self.yolo_check)
         buttons.addWidget(self.move_test)
         buttons.addWidget(self.step)
+        buttons.addWidget(self.dialogue_step)
         buttons.addWidget(stop)
         layout.addLayout(buttons)
 
@@ -106,8 +113,10 @@ class MentorPage(QWidget):
             return
         self.session.window = window
         self.last_action = None
+        self.last_dialogue = None
         self.step.setEnabled(False)
         self.move_test.setEnabled(False)
+        self.dialogue_step.setEnabled(False)
         self.status.setText("状态：已连接")
         self.output.append(f"已连接：{window.title} (HWND={window.handle})")
 
@@ -156,36 +165,83 @@ class MentorPage(QWidget):
         if self.last_action is None:
             self.step.setEnabled(False)
             self.move_test.setEnabled(False)
-            self.output.append("未找到师门任务红色链接，不执行点击。")
-            self.status.setText("状态：已截图，未找到目标")
+            self.dialogue_step.setEnabled(True)
+            self.output.append("未找到师门任务红色链接；可尝试‘识别对话 / 师门任务’检测当前对话框。")
+            self.status.setText("状态：已截图，未找到任务链接")
         else:
             self.step.setEnabled(True)
             self.move_test.setEnabled(True)
+            self.dialogue_step.setEnabled(False)
             self.output.append(f"候选目标：{self.last_action.target}；窗口相对坐标：{self.last_action.point}")
             self.output.append("绿色十字 = 准备点击位置；确认前绝不移动鼠标。")
             self._render_target(self.last_action.point)
             self.status.setText("状态：已识别，请先用‘移动到目标’检查坐标")
 
-    def move_to_target(self) -> None:
-        if self.last_action is None or self.last_action.point is None:
+    def detect_dialogue(self) -> None:
+        if self.session.window is None:
+            self.connect_selected()
+        if self.session.window is None:
             return
-        point = self.last_action.point
+        t0 = perf_counter()
+        result = self.session.snapshot()
+        capture_ms = (perf_counter() - t0) * 1000
+        if not result.ok or result.image is None:
+            self.output.append(result.message)
+            self.status.setText("状态：截图失败")
+            return
+        image = result.image
+        self.last_image = image
+        t1 = perf_counter()
+        dialogue_result = self.dialogue.analyze(image)
+        ocr_ms = (perf_counter() - t1) * 1000
+        self.output.append(f"对话框截图：{image.size[0]}x{image.size[1]}；截图耗时={capture_ms:.0f}ms")
+        self.output.append(f"对话框 OCR：{dialogue_result.text or '未识别到文字'}；OCR耗时={ocr_ms:.0f}ms")
+        self.output.append(f"对话框 OCR区域：{len(dialogue_result.regions)}")
+        option = self.dialogue.find_option(dialogue_result, "师门任务")
+        self.last_dialogue = option
+        if option is None:
+            self.output.append("未找到‘师门任务’选项，不执行点击。")
+            self.status.setText("状态：对话已识别，未找到师门任务")
+            return
+        self.output.append(f"对话选项：{option.text}；窗口相对坐标：{option.point}；置信度={option.confidence:.0%}")
+        self.output.append("绿色十字 = 对话选项准备点击位置。")
+        self._render_target(option.point)
+        self.status.setText("状态：已找到‘师门任务’，可移动检查")
+        self.move_test.setEnabled(True)
+        self.step.setEnabled(True)
+
+    def move_to_target(self) -> None:
+        point = None
+        target_name = ""
+        if self.last_dialogue is not None:
+            point = self.last_dialogue.point
+            target_name = self.last_dialogue.text
+        elif self.last_action is not None:
+            point = self.last_action.point
+            target_name = self.last_action.target
+        if point is None:
+            return
         self._render_target(point)
-        self.output.append(f"开始可见鼠标移动：窗口相对坐标 {point}；本次仅移动，不点击。")
+        self.output.append(f"开始可见鼠标移动：{target_name}；窗口相对坐标 {point}；本次仅移动，不点击。")
         ok, message = self.session.move_cursor(point[0], point[1], duration=0.45)
         self.output.append(message)
         self.status.setText("状态：鼠标已到目标位置（未点击）" if ok else "状态：鼠标移动失败")
 
     def execute_one(self) -> None:
-        if self.last_action is None or self.last_action.point is None:
-            self.observe_real()
-        if self.last_action is None or self.last_action.point is None:
+        point = None
+        target_name = ""
+        if self.last_dialogue is not None:
+            point = self.last_dialogue.point
+            target_name = self.last_dialogue.text
+        elif self.last_action is not None:
+            point = self.last_action.point
+            target_name = self.last_action.target
+        if point is None:
             return
-        point = self.last_action.point
         self._render_target(point)
         answer = QMessageBox.question(
             self, "确认执行",
-            f"识别目标：{self.last_action.target}\n窗口相对坐标：{point}\n\n鼠标会沿可见轨迹移动到绿色十字后左键点击。\n请确认它位于右侧任务面板红色文字上。",
+            f"识别目标：{target_name}\n窗口相对坐标：{point}\n\n鼠标会沿可见轨迹移动到绿色十字后左键点击。\n请确认它位于正确的游戏选项上。",
         )
         if answer != QMessageBox.Yes:
             self.output.append("用户取消执行；未发送鼠标输入。")
@@ -196,12 +252,18 @@ class MentorPage(QWidget):
         self.output.append("预览标记：CLICK OK=已发送输入；CLICK FAILED=输入失败。")
         self.status.setText("状态：已执行一次" if ok else "状态：执行失败")
         self.last_action = None
+        self.last_dialogue = None
         self.step.setEnabled(False)
         self.move_test.setEnabled(False)
+        if ok:
+            self.dialogue_step.setEnabled(True)
+            self.output.append("下一步：重新截图/识别当前对话；可继续识别‘师门任务’选项或后续对话。")
 
     def stop(self) -> None:
         self.last_action = None
+        self.last_dialogue = None
         self.step.setEnabled(False)
         self.move_test.setEnabled(False)
+        self.dialogue_step.setEnabled(False)
         self.output.append("执行已停止。")
         self.status.setText("状态：已停止")

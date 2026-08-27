@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QMainWindow, QListWidget, QStackedWidget, QWidget,
 from .dashboard import DashboardPage
 from .strategy import StrategyPage
 from .tasks import TasksPage
+from .mentor import MentorPage
 
 
 class MainWindow(QMainWindow):
@@ -13,12 +14,13 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("MHXY Agent")
         self.resize(1180, 760)
         self.nav = QListWidget()
-        self.nav.addItems(["总览", "Strategy Brain", "今日任务"])
+        self.nav.addItems(["总览", "Strategy Brain", "今日任务", "师门任务"])
         self.nav.setFixedWidth(180)
         self.stack = QStackedWidget()
         self.stack.addWidget(DashboardPage())
         self.stack.addWidget(StrategyPage())
         self.stack.addWidget(TasksPage())
+        self.stack.addWidget(MentorPage())
         self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
         self.nav.setCurrentRow(0)
 

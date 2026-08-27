@@ -13,17 +13,42 @@ class Detection:
 
 
 class YoloDetector:
-    """Optional YOLO detector. The desktop app remains usable without weights."""
+    """YOLO detector with automatic NVIDIA CUDA/CPU device selection."""
 
     def __init__(self, model_path: str = "models/mhxy_yolo.pt", confidence: float = 0.45) -> None:
         self.model_path = Path(model_path)
         self.confidence = confidence
         self._model: Optional[Any] = None
         self.error: str = ""
+        self.device = "cpu"
+        self.device_name = "CPU"
+        self._resolve_device()
+
+    def _resolve_device(self) -> None:
+        try:
+            import torch  # type: ignore
+
+            if torch.cuda.is_available():
+                self.device = "0"
+                self.device_name = torch.cuda.get_device_name(0)
+            else:
+                self.device = "cpu"
+                self.device_name = "CPU（CUDA不可用）"
+        except Exception as exc:
+            self.device = "cpu"
+            self.device_name = "CPU（PyTorch/CUDA检查失败）"
+            self.error = f"CUDA检查失败：{exc}"
 
     @property
     def available(self) -> bool:
         return self.model_path.exists()
+
+    @property
+    def using_cuda(self) -> bool:
+        return self.device != "cpu"
+
+    def refresh_device(self) -> None:
+        self._resolve_device()
 
     def load(self) -> bool:
         if not self.available:
@@ -31,6 +56,8 @@ class YoloDetector:
             return False
         try:
             from ultralytics import YOLO  # type: ignore
+
+            self._resolve_device()
             self._model = YOLO(str(self.model_path))
             self.error = ""
             return True
@@ -44,7 +71,14 @@ class YoloDetector:
         if self._model is None and not self.load():
             return []
         try:
-            results = self._model.predict(source=image, conf=self.confidence, verbose=False)
+            self._resolve_device()
+            results = self._model.predict(
+                source=image,
+                conf=self.confidence,
+                device=self.device,
+                half=self.using_cuda,
+                verbose=False,
+            )
             detections: List[Detection] = []
             for result in results:
                 names = getattr(result, "names", {})

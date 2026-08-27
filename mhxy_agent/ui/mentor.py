@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QMessageBox, QPush
 from ..config import AppConfig
 from ..execution.game_session import GameSession
 from ..execution.mentor_detector import MentorTargetDetector
-from ..execution.vision import VisionEngine
+from ..execution.vision_fusion import VisionFusion
 
 
 class MentorPage(QWidget):
@@ -18,11 +18,11 @@ class MentorPage(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.session = GameSession(AppConfig.from_env().game_window_keyword)
-        self.vision = VisionEngine()
+        self.fusion = VisionFusion()
         self.detector = MentorTargetDetector()
         self.last_action = None
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("师门任务 · 真实窗口单步模式"))
+        layout.addWidget(QLabel("师门任务 · YOLO + OCR 视觉模式"))
 
         row = QHBoxLayout()
         row.addWidget(QLabel("游戏窗口："))
@@ -99,17 +99,26 @@ class MentorPage(QWidget):
         path.parent.mkdir(parents=True, exist_ok=True)
         image.save(path)
         self.preview.setPixmap(QPixmap(str(path)).scaled(self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        vision = self.vision.analyze(image)
-        self.last_action = self.detector.detect(vision)
+
+        fused = self.fusion.analyze(image)
+        self.last_action = self.detector.detect(fused.ocr)
         self.output.append(f"截图成功：{image.size[0]}x{image.size[1]}")
-        self.output.append(f"OCR：{vision.text or '未识别到文字'}")
+        self.output.append(f"OCR：{fused.ocr.text or '未识别到文字'}")
+        if fused.yolo:
+            for target in fused.targets:
+                self.output.append(f"YOLO：{target.label} {target.confidence:.0%} box={target.box} OCR={target.ocr_text or '-'}")
+        elif self.fusion.detector.error:
+            self.output.append(f"YOLO：{self.fusion.detector.error}")
+        else:
+            self.output.append("YOLO：当前画面未检测到目标")
+
         if self.last_action is None:
             self.step.setEnabled(False)
             self.output.append("未找到师门目标，不执行点击。")
             self.status.setText("状态：已截图，未找到目标")
         else:
             self.step.setEnabled(True)
-            self.output.append(f"目标：{self.last_action.target}；窗口相对坐标：{self.last_action.point}")
+            self.output.append(f"候选目标：{self.last_action.target}；窗口相对坐标：{self.last_action.point}")
             self.status.setText("状态：已识别，可执行一步")
 
     def execute_one(self) -> None:
